@@ -1,0 +1,41 @@
+name: Translation validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm zlib1g-dev gcc-aarch64-linux-gnu qemu-user
+      - name: Scanner, page planner, upload and ARM64 probes
+        run: bash tests/translation-layer/run.sh
+      - name: Upload buffer sanitizers
+        run: |
+          clang -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined tests/translation-layer/upload_test.c -o /tmp/upload-test
+          /tmp/upload-test
+
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compressed heap
+        run: bash tests/translation-layer/run_compressed_heap.sh
+      - name: Font paths
+        run: bash tests/translation-layer/run_font_paths.sh
+      - name: APK ordering
+        run: python3 tests/translation-layer/test_apk_order.py
+      - name: iOS HTTP bridge syntax
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang -target arm64-apple-ios15.5 -isysroot "$SDK" -fsyntax-only src/translation-layer-next/husk-tl-jni-http.c
+          xcrun --sdk iphoneos clang -target arm64-apple-ios15.5 -isysroot "$SDK" -fobjc-arc -fblocks -fsyntax-only src/translation-layer-next/husk-tl-http.m

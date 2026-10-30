@@ -27,6 +27,8 @@ static jvalue vz(int z) { jvalue v; v.j = 0; v.z = z != 0; return v; }
 static void Noop(tl_jcall *c) { (void)c; }
 static const char *S(const jobj *o) { const char *s = tl_jni_string(o); return s ? s : ""; }
 
+#include "husk-tl-upload.h"
+
 /* ------------------------------------------------------------------ HashMap */
 
 typedef struct { jobj **k, **v; int n, cap; } hmap;
@@ -116,15 +118,18 @@ static void UWR_run(tl_jcall *c)
 
     /* the request body, if any: the engine says how much with a null buffer, then hands it over in pieces */
     const size_t CHUNK = 128 * 1024;
-    uint8_t *chunk = malloc(CHUNK), *body = NULL; size_t body_len = 0;
+    uint8_t *chunk = malloc(CHUNK), *body = NULL; size_t body_len = 0, body_cap = 0;
+    if (!chunk) { error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Out of memory preparing upload")); return; }
     jobj *buf = direct_buffer(chunk, (int64_t)CHUNK);
     if (upload(env, cls, u->ptr, NULL) > 0) {
         for (;;) {
             int n = upload(env, cls, u->ptr, buf);
             if (n <= 0) break;
-            body = realloc(body, body_len + (size_t)n);
-            memcpy(body + body_len, chunk, (size_t)n);
-            body_len += (size_t)n;
+            if ((size_t)n > CHUNK || !tl_append_upload(&body, &body_len, &body_cap, chunk, (size_t)n)) {
+                error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Upload too large or out of memory"));
+                free(body);
+                return; /* buffer may still be referenced by the engine */
+            }
         }
     }
 
@@ -132,6 +137,11 @@ static void UWR_run(tl_jcall *c)
     hmap *hm = u->headers ? HM(u->headers) : NULL;
     int nh = hm ? hm->n : 0;
     const char **names = calloc((size_t)nh + 1, sizeof(char *)), **values = calloc((size_t)nh + 1, sizeof(char *));
+    if (!names || !values) {
+        error(env, cls, u->ptr, TL_HTTP_SDK, tl_jni_new_string("Out of memory preparing headers"));
+        free(names); free(values); free(body);
+        return; /* buffer may still be referenced by the engine */
+    }
     for (int i = 0; i < nh; i++) { names[i] = S(hm->k[i]); values[i] = S(hm->v[i]); }
 
     tl_http_request rq = { .url = u->url, .method = u->method, .nheaders = nh, .header_names = names, .header_values = values,
@@ -141,6 +151,7 @@ static void UWR_run(tl_jcall *c)
     if (!tl_http_perform(&rq, &rs)) {
         tl_log_line("http: %s failed: %s", u->url, rs.message);
         error(env, cls, u->ptr, rs.error, tl_jni_new_string(rs.message));
+        tl_http_response_free(&rs);
     } else {
         long content_length = -1;
         for (int i = 0; i < rs.nheaders; i++) {
@@ -317,7 +328,7 @@ static void XReq_do(tl_jcall *c)
     if (!done || !fail) return;
 
     /* the body, which the library holds and hands over in pieces on request */
-    uint8_t *body = NULL; size_t body_len = 0;
+    uint8_t *body = NULL; size_t body_len = 0, body_cap = 0; bool upload_failed = false;
     if (q->clen > 0) {
         read_fn rd = x_native(XIN, "nativeRead", "(JJ[BJJ)I", "Java_com_xbox_httpclient_HttpClientRequestBody_00024NativeInputStream_nativeRead");
         if (rd) {
@@ -327,12 +338,16 @@ static void XReq_do(tl_jcall *c)
             for (;;) {
                 int n = rd(env, stream, call, (int64_t)body_len, buf, 0, CH);
                 if (n <= 0) break;
-                body = realloc(body, body_len + (size_t)n);
-                memcpy(body + body_len, buf->arr.data, (size_t)n);
-                body_len += (size_t)n;
+                if (n > CH || !tl_append_upload(&body, &body_len, &body_cap, buf->arr.data, (size_t)n)) { upload_failed = true; break; }
             }
             tl_jni_unref(buf); tl_jni_unref(stream);
         }
+    }
+
+    if (upload_failed) {
+        jobj *a = tl_jni_new_string("java.io.IOException"), *b = tl_jni_new_string("Upload too large or out of memory"), *n = tl_jni_new_string("Has active network: true");
+        fail(env, self, call, a, b, n, 0);
+        tl_jni_unref(a); tl_jni_unref(b); tl_jni_unref(n); free(body); return;
     }
 
     tl_http_request rq = { .url = q->url, .method = q->method, .nheaders = q->nh, .header_names = (const char *const *)q->hn,

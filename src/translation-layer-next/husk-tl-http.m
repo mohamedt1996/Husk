@@ -78,16 +78,39 @@ static bool perform_once(const tl_http_request *req, tl_http_response *out)
         NSDictionary *fields = http.allHeaderFields;
         out->header_names = calloc(fields.count + 1, sizeof(char *));
         out->header_values = calloc(fields.count + 1, sizeof(char *));
+        if (!out->header_names || !out->header_values) {
+            tl_http_response_free(out);
+            put_message(out, TL_HTTP_SDK, @"Out of memory reading response headers");
+            return false;
+        }
         out->header_names[0] = strdup("Status");
         out->header_values[0] = strdup([NSString stringWithFormat:@"HTTP/1.1 %d %@", out->status, [NSHTTPURLResponse localizedStringForStatusCode:http.statusCode]].UTF8String);
         out->nheaders = 1;
+        if (!out->header_names[0] || !out->header_values[0]) {
+            tl_http_response_free(out);
+            put_message(out, TL_HTTP_SDK, @"Out of memory reading response headers");
+            return false;
+        }
         for (id key in fields) {
             NSString *k = [key description], *v = [fields[key] description];
             out->header_names[out->nheaders] = strdup(k.UTF8String ?: "");
             out->header_values[out->nheaders] = strdup(v.UTF8String ?: "");
             out->nheaders++;
+            if (!out->header_names[out->nheaders - 1] || !out->header_values[out->nheaders - 1]) {
+                tl_http_response_free(out);
+                put_message(out, TL_HTTP_SDK, @"Out of memory reading response headers");
+                return false;
+            }
         }
-        if (data.length) { out->body = malloc(data.length); memcpy(out->body, data.bytes, data.length); out->body_len = data.length; }
+        if (data.length) {
+            out->body = malloc(data.length);
+            if (!out->body) {
+                tl_http_response_free(out);
+                put_message(out, TL_HTTP_SDK, @"Out of memory reading response body");
+                return false;
+            }
+            memcpy(out->body, data.bytes, data.length); out->body_len = data.length;
+        }
         return true;
     }
 }

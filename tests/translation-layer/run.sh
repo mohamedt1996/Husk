@@ -20,6 +20,10 @@ OUT=${OUT:-$(mktemp -d)}
 mkdir -p "$OUT"
 CFLAGS="-std=gnu11 -O2 -g -Wall -Wextra -Werror -I$SRC"
 
+echo "== HTTP upload buffer"
+cc $CFLAGS -o "$OUT/upload_test" "$HERE/upload_test.c"
+"$OUT/upload_test"
+
 echo "== page planner"
 cc $CFLAGS -o "$OUT/plan_test" "$HERE/plan_test.c" "$SRC/husk-tl-elf.c"
 "$OUT/plan_test"

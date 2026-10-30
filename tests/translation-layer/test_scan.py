@@ -66,7 +66,15 @@ x86 = build("libx86.so", "plain.c", target="x86_64-linux-android29")
 
 
 def readelf_relocs(lib):
-    return len(re.findall(r"R_AARCH64_\w+", sh("llvm-readelf", "-r", lib)))
+    output = sh("llvm-readelf", "-r", lib)
+    # LLVM 19 prints decoded RELR offsets without R_AARCH64_RELATIVE names.
+    # Its section heading gives the number of decoded relocations instead.
+    sections = re.split(r"(?=Relocation section ')", output)
+    count = 0
+    for section in sections:
+        relr = re.search(r"^Relocation section '\.relr(?:\.dyn)?' .* contains (\d+) entries:", section)
+        count += int(relr.group(1)) if relr else len(re.findall(r"R_AARCH64_\w+", section))
+    return count
 
 
 def readelf_imports(lib):
