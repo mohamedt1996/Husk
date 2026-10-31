@@ -79,7 +79,10 @@ final class HuskGLView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let scale = window?.screen.scale ?? UIScreen.main.scale
+        // Capped at 2x like the other screens: the guest is ~360 px wide, so a 3x drawable (2796x1290 on a
+        // 6.7" phone) only adds fill and bandwidth cost to an upscale nobody can see. Only the aspect ratio
+        // feeds the guest resolution, so this does not change the machine a snapshot was saved on.
+        let scale = min(window?.screen.scale ?? UIScreen.main.scale, 2)
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale,
                                          height: bounds.height * scale)

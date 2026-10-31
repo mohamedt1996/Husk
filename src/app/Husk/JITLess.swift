@@ -10,7 +10,10 @@ import Foundation
 enum JITLess {
     static let key = "husk.jitless"
 
-    static var enabled: Bool { UserDefaults.standard.bool(forKey: key) }
+    static var enabled: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
 
     /// Prebuilt: the app's Frameworks, where the installer signs them with the app.
     static var bundledDirectory: String? { Bundle.main.privateFrameworksPath }
@@ -69,7 +72,7 @@ enum JITLess {
         // The signer revision and the running app's bundle ID are part of the tag: libraries signed by an older signer, or
         // under another install's identifier (SideStore appends the team, a TrollStore/enterprise install may not), are signed again.
         let ident = Bundle.main.bundleIdentifier ?? "com.husk.app"
-        let tag = cred.tag + "-s12-" + ident
+        let tag = cred.tag + "-s14-" + ident
         let dir = cacheDirectory.path
         try await Task.detached(priority: .userInitiated) { [ident] in
             final class Box { let report: (String) -> Void; init(_ r: @escaping (String) -> Void) { report = r } }

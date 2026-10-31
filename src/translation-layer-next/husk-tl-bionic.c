@@ -22,6 +22,11 @@
 #include <sys/sysctl.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <TargetConditionals.h>
+#include <mach/mach.h>
+#if TARGET_OS_IPHONE
+#include <os/proc.h>
+#endif
 
 #include "husk-tl-ld.h"
 #include "husk-tl-va.h"
@@ -161,15 +166,37 @@ const char *tl_sysprop(const char *name)
 /* __system_property_find returns an opaque pointer that read() takes back. */
 /* sysinfo(2): what the engines ask for to size their caches -- how much RAM there is, and how much is free. */
 typedef struct { long uptime; unsigned long loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap; unsigned short procs, pad; unsigned long totalhigh, freehigh; unsigned int mem_unit; char pad2[4]; } guest_sysinfo;
+/* Engines size texture pools and quality tiers from total and free RAM. Reporting the phone's RAM (or a made-up 11 GB)
+ * told a 6 GB iPhone's games they had ~4x the memory iOS lets one app use, and they filled it until jetsam killed Husk.
+ * The real ceiling is footprint + os_proc_available_memory(); free is what is left of it, minus a reserve for ANGLE,
+ * the Metal driver and Husk's own UI, which the game cannot see but jetsam counts. */
+#define TL_MEM_RESERVE (384ull << 20)
+void tl_mem_budget(uint64_t *total, uint64_t *avail)
+{
+    uint64_t phys = 0; size_t len = sizeof(phys);
+    sysctlbyname("hw.memsize", &phys, &len, NULL, 0);
+    uint64_t left = 0, used = 0;
+#if TARGET_OS_IPHONE
+    left = (uint64_t)os_proc_available_memory();
+#endif
+    task_vm_info_data_t info; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) used = info.phys_footprint;
+    uint64_t t = left ? used + left : (phys ? phys / 2 : (3ull << 30));
+    if (phys && t > phys) t = phys;
+    uint64_t a = left > TL_MEM_RESERVE ? left - TL_MEM_RESERVE : (left ? left / 4 : t / 4);
+    if (total) *total = t;
+    if (avail) *avail = a;
+}
+
 static int bionic_sysinfo(guest_sysinfo *si)
 {
     memset(si, 0, sizeof(*si));
-    uint64_t mem = 0; size_t len = sizeof(mem);
-    sysctlbyname("hw.memsize", &mem, &len, NULL, 0);
+    uint64_t total = 0, avail = 0;
+    tl_mem_budget(&total, &avail);
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     si->uptime = ts.tv_sec;
-    si->totalram = (unsigned long)mem;
-    si->freeram = (unsigned long)(mem / 4);
+    si->totalram = (unsigned long)total;
+    si->freeram = (unsigned long)avail;
     si->mem_unit = 1;
     si->procs = 1;
     return 0;
@@ -561,8 +588,8 @@ static long bionic_sysconf(int name)
     case 38:   return 1024;                                  /* _SC_IOV_MAX */
     case 39: case 40: return 16384;                          /* _SC_PAGESIZE / _SC_PAGE_SIZE */
     case 96: case 97: return getenv("TL_NCPU") ? atol(getenv("TL_NCPU")) : (long)sysconf(_SC_NPROCESSORS_ONLN);   /* _SC_NPROCESSORS_CONF / ONLN */
-    case 98: { uint64_t m = 0; size_t l = sizeof(m); sysctlbyname("hw.memsize", &m, &l, NULL, 0); return (long)(m / 16384); }
-    case 99: { uint64_t m = 0; size_t l = sizeof(m); sysctlbyname("hw.memsize", &m, &l, NULL, 0); return (long)(m / 16384 / 2); }
+    case 98: { uint64_t t = 0; tl_mem_budget(&t, NULL); return (long)(t / 16384); }   /* _SC_PHYS_PAGES: the jetsam budget */
+    case 99: { uint64_t a = 0; tl_mem_budget(NULL, &a); return (long)(a / 16384); }   /* _SC_AVPHYS_PAGES */
     case 100:  return 200809;                                /* _SC_MONOTONIC_CLOCK */
     case 0x4a: return 16384;                                 /* _SC_THREAD_STACK_MIN-ish */
     default:

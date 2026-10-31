@@ -1,0 +1,90 @@
+name: Build IPA
+
+# Rebuilds the app (Swift + translation layer) from this repo and reuses the heavy prebuilt runtime pieces
+# (QEMU, ANGLE, MoltenVK, PS4 layer, guest kernel, Java runtime, JIT-less dylibs) from the upstream release,
+# which take hours to build and need a LineageOS image that CI does not have.
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Leviidev/Husk release to take the prebuilt runtime from
+        default: "3.2.1"
+  push:
+    branches: [main, husk-3.2.1-iphone15plus]
+    paths: ["src/**", ".github/workflows/build-ipa.yml", "scripts/package_ipa.sh"]
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      UPSTREAM_TAG: ${{ github.event.inputs.upstream_tag || '3.2.1' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          brew install xcodegen qemu
+          rustup target add aarch64-apple-ios
+          xcodebuild -version
+
+      - name: Prebuilt runtime from upstream ${{ env.UPSTREAM_TAG }}
+        run: |
+          set -euo pipefail
+          mkdir -p upstream && cd upstream
+          gh release download "$UPSTREAM_TAG" -R Leviidev/Husk -p 'Husk.ipa' || \
+            gh release download "$UPSTREAM_TAG" -R Leviidev/Husk -p '*.ipa'
+          IPA="$(ls *.ipa | head -1)"
+          unzip -q "$IPA"
+          APP="$PWD/$(ls -d Payload/*.app | head -1)"
+          FW="$APP/Frameworks"
+          echo "== upstream bundle: $APP"; ls "$FW"; ls "$APP" | head -60
+          cd "$GITHUB_WORKSPACE"
+          L=build/ios-arm64/lib; S=build/ios-arm64/sysroot/lib
+          BIOS=third_party/build/qemu-10.0.12-utm/pc-bios
+          mkdir -p "$L" "$S" guests/phase0 "$BIOS" build/aot
+          cp "$FW/libqemu-aarch64-softmmu.dylib" "$L/"
+          cp "$FW/libANGLE-shared.dylib" "$S/"
+          [ -f "$FW/libhuskps4.dylib" ] && cp "$FW/libhuskps4.dylib" "$L/"
+          if [ -d "$FW/MoltenVK.framework" ]; then
+            xcodebuild -create-xcframework -framework "$FW/MoltenVK.framework" -output "$L/MoltenVK.xcframework"
+          elif [ -f "$FW/libMoltenVK.dylib" ]; then
+            xcodebuild -create-xcframework -library "$FW/libMoltenVK.dylib" -output "$L/MoltenVK.xcframework"
+          fi
+          cp "$APP/vmlinuz-virt" "$APP/initramfs-virt" guests/phase0/
+          [ -d "$APP/pc-bios" ] && cp "$APP"/pc-bios/*.rom "$BIOS/" || true
+          [ -f "$APP/edk2-aarch64-code.fd" ] && bzip2 -c "$APP/edk2-aarch64-code.fd" > "$BIOS/edk2-aarch64-code.fd.bz2"
+          [ -d "$APP/java-runtime" ] && rsync -a "$APP/java-runtime/" build/java-runtime/
+          [ -d "$APP/android-system" ] && rsync -a "$APP/android-system/" build/android-system/
+          ls "$FW"/aot-*.dylib >/dev/null 2>&1 && cp "$FW"/aot-*.dylib build/aot/ || true
+          # Any other dylib upstream embeds that this project expects is reported, not guessed at.
+          echo "== staged"; find build guests third_party -maxdepth 4 -type f | head -50
+
+      - name: On-device pairing library (Rust)
+        run: ./scripts/build_rppairing_ios.sh
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          DD="$RUNNER_TEMP/dd" ./scripts/package_ipa.sh dist/Husk.ipa || { tail -80 "$RUNNER_TEMP/dd/build.log"; exit 1; }
+          DD="$RUNNER_TEMP/dd" ./scripts/package_ipa.sh --trollstore dist/Husk.tipa
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Husk-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/dd/build.log
+          if-no-files-found: ignore

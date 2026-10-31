@@ -85,6 +85,10 @@ int tl_signal_from_darwin(int darwin_sig);
 /* Android system properties, for __system_property_get and Java's Build. */
 const char *tl_sysprop(const char *name);
 
+/* Memory as the guest should see it: the process's jetsam budget, not the phone's RAM. *total is what this process may
+ * hold before iOS kills it; *avail is what is left of that, less a reserve for the GPU driver and Husk itself. */
+void tl_mem_budget(uint64_t *total, uint64_t *avail);
+
 /* The log. */
 void tl_log_line(const char *fmt, ...);
 

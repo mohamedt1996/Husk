@@ -26,7 +26,7 @@ final class SigningCertificate: ObservableObject {
     private static let callbackScheme = "husk"
     private static let callbackHost = "certificate"
 
-    private init() { info = Self.loadStored().flatMap { Self.inspect($0.p12, $0.password) } }
+    private init() { info = Self.loadStored().flatMap { Self.inspect($0.p12, $0.password).0 } }
 
     // MARK: - what the signer needs
 
@@ -40,10 +40,21 @@ final class SigningCertificate: ObservableObject {
 
     /// A .p12 file and its password (empty when it has none).
     func importP12(_ data: Data, password: String) {
-        guard let found = Self.inspect(data, password) else {
-            lastError = "That certificate could not be opened. Check the password."
+        // Try the password exactly as typed first: trimming it outright broke passwords with edge spaces. The trimmed
+        // form is only a fallback for a stray space from paste or autofill.
+        let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        var reason = ""
+        var opened: (Info, String)?
+        for candidate in (trimmed == password ? [password] : [password, trimmed]) {
+            let (info, why) = Self.inspect(data, candidate)
+            if let info { opened = (info, candidate); break }
+            reason = why
+        }
+        guard let opened else {
+            lastError = "That certificate could not be opened: \(reason.isEmpty ? "check the password" : reason)."
             return
         }
+        let (found, password) = opened
         if let team = Self.installedTeamID, team != found.teamID {
             lastError = "This certificate belongs to team \(found.teamID), but Husk was installed with team \(team). "
                       + "Use the certificate of the Apple ID that installed Husk."
@@ -70,13 +81,19 @@ final class SigningCertificate: ObservableObject {
     func handle(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == Self.callbackScheme, url.host?.lowercased() == Self.callbackHost else { return false }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        func value(_ name: String) -> String? { items.first { $0.name.lowercased() == name }?.value }
+        func value(_ name: String) -> String? {
+            guard let raw = items.first(where: { $0.name.lowercased() == name })?.value else { return nil }
+            // queryItems are already percent-decoded; decoding again mangled any password containing '%'.
+            return raw
+        }
         // a base64 '+' may arrive as a space
         guard let cert = value("cert")?.replacingOccurrences(of: " ", with: "+"), let data = Data(base64Encoded: cert) else {
             lastError = "The store's answer had no certificate in it."
             return true
         }
-        importP12(data, password: value("password") ?? "")
+        var password = value("password") ?? value("pass") ?? ""
+        if password == "$(PASSWORD)" { password = "" }
+        importP12(data, password: password)
         return true
     }
 
@@ -109,14 +126,18 @@ final class SigningCertificate: ObservableObject {
 
     // MARK: - Keychain and inspection
 
-    private nonisolated static func inspect(_ p12: Data, _ password: String) -> Info? {
+    private nonisolated static func inspect(_ p12: Data, _ password: String) -> (Info?, String) {
         var team = [CChar](repeating: 0, count: 64), err = [CChar](repeating: 0, count: 200)
         var notAfter: Double = 0
         let ok = p12.withUnsafeBytes { b in
             husk_p12_info(b.bindMemory(to: UInt8.self).baseAddress, b.count, password, &team, team.count, &notAfter, &err, err.count)
         }
-        guard ok else { HuskLog.log("sign", "certificate not usable: \(String(cString: err))"); return nil }
-        return Info(teamID: String(cString: team), expires: Date(timeIntervalSince1970: notAfter), tag: tag(p12))
+        guard ok else {
+            let why = String(cString: err)
+            HuskLog.log("sign", "certificate not usable: \(why)")
+            return (nil, why)
+        }
+        return (Info(teamID: String(cString: team), expires: Date(timeIntervalSince1970: notAfter), tag: tag(p12)), "")
     }
 
     private nonisolated static func tag(_ p12: Data) -> String {
