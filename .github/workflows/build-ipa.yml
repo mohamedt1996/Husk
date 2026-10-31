@@ -15,7 +15,7 @@ on:
     paths: ["src/**", ".github/workflows/build-ipa.yml", "scripts/package_ipa.sh"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   ipa:
@@ -85,6 +85,12 @@ jobs:
           name: Husk-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
+
+      - name: Publish release
+        run: |
+          TAG="build-$(git rev-parse --short HEAD)"
+          gh release create "$TAG" dist/Husk.ipa dist/Husk.tipa -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Husk 3.2.1 (iPhone 15 Plus fixes) $TAG" --notes "Built from ${GITHUB_SHA}. Husk.ipa for SideStore/AltStore, Husk.tipa for TrollStore." --prerelease
 
       - uses: actions/upload-artifact@v4
         if: failure()
