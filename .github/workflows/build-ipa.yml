@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   ipa:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       UPSTREAM_TAG: ${{ github.event.inputs.upstream_tag || '3.2.1' }}
@@ -29,9 +29,13 @@ jobs:
 
       - name: Tools
         run: |
+          # StikJIT.xcframework's interface is from Swift 6.4: use the newest Xcode on the image.
+          ls -d /Applications/Xcode*.app
+          XC="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version; swift --version
           brew install xcodegen qemu
           rustup target add aarch64-apple-ios
-          xcodebuild -version
 
       - name: Prebuilt runtime from upstream ${{ env.UPSTREAM_TAG }}
         run: |
