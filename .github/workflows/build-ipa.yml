@@ -43,7 +43,7 @@ jobs:
           unzip -q "$IPA"
           APP="$PWD/$(ls -d Payload/*.app | head -1)"
           FW="$APP/Frameworks"
-          echo "== upstream bundle: $APP"; ls "$FW"; ls "$APP" | head -60
+          echo "== upstream bundle: $APP"; ls "$FW"; ls "$APP"
           cd "$GITHUB_WORKSPACE"
           L=build/ios-arm64/lib; S=build/ios-arm64/sysroot/lib
           BIOS=third_party/build/qemu-10.0.12-utm/pc-bios
@@ -63,7 +63,7 @@ jobs:
           [ -d "$APP/android-system" ] && rsync -a "$APP/android-system/" build/android-system/
           ls "$FW"/aot-*.dylib >/dev/null 2>&1 && cp "$FW"/aot-*.dylib build/aot/ || true
           # Any other dylib upstream embeds that this project expects is reported, not guessed at.
-          echo "== staged"; find build guests third_party -maxdepth 4 -type f | head -50
+          echo "== staged"; find build guests third_party -maxdepth 3 -type f -not -path "*/cacerts/*" -not -path "*/java-runtime/*" || true
 
       - name: On-device pairing library (Rust)
         run: ./scripts/build_rppairing_ios.sh
